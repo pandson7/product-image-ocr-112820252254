@@ -1,0 +1,178 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>OCR System Browser Test</title>
+    <style>
+        body { font-family: Arial, sans-serif; margin: 20px; }
+        .test-section { margin: 20px 0; padding: 15px; border: 1px solid #ccc; }
+        .success { color: green; }
+        .error { color: red; }
+        .info { color: blue; }
+        button { padding: 10px 20px; margin: 5px; }
+        #results { background: #f5f5f5; padding: 10px; margin: 10px 0; }
+    </style>
+</head>
+<body>
+    <h1>Product Image OCR System - Browser Test</h1>
+    
+    <div class="test-section">
+        <h2>Test Results</h2>
+        <div id="testResults"></div>
+    </div>
+    
+    <div class="test-section">
+        <h2>Manual Test</h2>
+        <input type="file" id="fileInput" accept="image/*">
+        <button onclick="testUpload()">Test Upload</button>
+        <div id="manualResults"></div>
+    </div>
+
+    <script>
+        const API_BASE_URL = 'https://txg2r8rk27.execute-api.us-east-1.amazonaws.com/prod';
+        
+        function log(message, type = 'info') {
+            const div = document.getElementById('testResults');
+            const p = document.createElement('p');
+            p.className = type;
+            p.textContent = new Date().toLocaleTimeString() + ': ' + message;
+            div.appendChild(p);
+        }
+        
+        async function runTests() {
+            log('Starting browser tests...', 'info');
+            
+            try {
+                // Test 1: CORS preflight
+                log('Testing CORS preflight...', 'info');
+                const corsResponse = await fetch(API_BASE_URL + '/upload', {
+                    method: 'OPTIONS',
+                    headers: {
+                        'Origin': window.location.origin,
+                        'Access-Control-Request-Method': 'POST',
+                        'Access-Control-Request-Headers': 'Content-Type'
+                    }
+                });
+                
+                if (corsResponse.ok) {
+                    log('✓ CORS preflight successful', 'success');
+                } else {
+                    log('✗ CORS preflight failed', 'error');
+                }
+                
+                // Test 2: Upload endpoint
+                log('Testing upload endpoint...', 'info');
+                const uploadResponse = await fetch(API_BASE_URL + '/upload', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'Origin': window.location.origin
+                    },
+                    body: JSON.stringify({
+                        fileName: 'browser-test.jpg',
+                        fileType: 'image/jpeg'
+                    })
+                });
+                
+                if (uploadResponse.ok) {
+                    const uploadData = await uploadResponse.json();
+                    log('✓ Upload endpoint successful: ' + uploadData.jobId, 'success');
+                    
+                    // Test 3: Status endpoint
+                    log('Testing status endpoint...', 'info');
+                    const statusResponse = await fetch(API_BASE_URL + '/status/' + uploadData.jobId, {
+                        headers: {
+                            'Origin': window.location.origin
+                        }
+                    });
+                    
+                    if (statusResponse.ok) {
+                        const statusData = await statusResponse.json();
+                        log('✓ Status endpoint successful: ' + statusData.status, 'success');
+                    } else {
+                        log('✗ Status endpoint failed', 'error');
+                    }
+                    
+                } else {
+                    log('✗ Upload endpoint failed', 'error');
+                }
+                
+                log('Browser tests completed!', 'info');
+                
+            } catch (error) {
+                log('✗ Test error: ' + error.message, 'error');
+            }
+        }
+        
+        async function testUpload() {
+            const fileInput = document.getElementById('fileInput');
+            const resultsDiv = document.getElementById('manualResults');
+            
+            if (!fileInput.files[0]) {
+                resultsDiv.innerHTML = '<p class="error">Please select a file first</p>';
+                return;
+            }
+            
+            const file = fileInput.files[0];
+            resultsDiv.innerHTML = '<p class="info">Uploading ' + file.name + '...</p>';
+            
+            try {
+                // Get upload URL
+                const uploadResponse = await fetch(API_BASE_URL + '/upload', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({
+                        fileName: file.name,
+                        fileType: file.type
+                    })
+                });
+                
+                const uploadData = await uploadResponse.json();
+                const jobId = uploadData.jobId;
+                
+                // Upload file
+                await fetch(uploadData.uploadUrl, {
+                    method: 'PUT',
+                    headers: {
+                        'Content-Type': file.type
+                    },
+                    body: file
+                });
+                
+                resultsDiv.innerHTML = '<p class="success">File uploaded! Job ID: ' + jobId + '</p><p class="info">Processing...</p>';
+                
+                // Poll for results
+                let attempts = 0;
+                const poll = async () => {
+                    attempts++;
+                    const statusResponse = await fetch(API_BASE_URL + '/status/' + jobId);
+                    const statusData = await statusResponse.json();
+                    
+                    if (statusData.status === 'completed') {
+                        const resultsResponse = await fetch(API_BASE_URL + '/results/' + jobId);
+                        const resultsData = await resultsResponse.json();
+                        
+                        resultsDiv.innerHTML = '<p class="success">Processing completed!</p><pre>' + 
+                            JSON.stringify(resultsData.extractedData, null, 2) + '</pre>';
+                    } else if (statusData.status === 'failed') {
+                        resultsDiv.innerHTML = '<p class="error">Processing failed: ' + statusData.errorMessage + '</p>';
+                    } else if (attempts < 20) {
+                        setTimeout(poll, 3000);
+                    } else {
+                        resultsDiv.innerHTML = '<p class="error">Processing timeout</p>';
+                    }
+                };
+                
+                setTimeout(poll, 3000);
+                
+            } catch (error) {
+                resultsDiv.innerHTML = '<p class="error">Error: ' + error.message + '</p>';
+            }
+        }
+        
+        // Run tests on page load
+        window.onload = runTests;
+    </script>
+</body>
+</html>
